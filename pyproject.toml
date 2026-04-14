@@ -21,10 +21,10 @@ dependencies = [
 
 [project.urls]
 # Replace this with the final GitHub repository URL before publishing to the ComfyUI Registry.
-Repository = "https://github.com/your-username/darkhub-video-to-base64"
+Repository = "https://github.com/Cyber05CC/darkHUB-Video-to-Base64"
 
 [tool.comfy]
 # Replace this with your actual Comfy Registry publisher ID before publishing.
-PublisherId = "your-publisher-id"
+PublisherId = "darken"
 DisplayName = "darkHUB Video to Base64"
 includes = ["web"]
