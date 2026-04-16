@@ -1,8 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import io
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -18,14 +19,17 @@ import folder_paths
 try:
     from ._version import VERSION as PACKAGE_VERSION
 except ImportError:
-    PACKAGE_VERSION = "1.0.0"
+    PACKAGE_VERSION = "1.1.0"
 
 
 PACKAGE_NAME = "darkHUB Video to Base64"
 NODE_CATEGORY = "darkHUB/Media"
+OUTPUT_SUBFOLDER = "darkHUB-Video-to-Base64"
 DEFAULT_DOWNLOADS_DIR = Path.home() / "Downloads"
 DEFAULT_ENCODE_PREFIX = "darkhub_media"
 DEFAULT_DECODE_PREFIX = "darkhub_decoded"
+BASE64_PREVIEW_CHARS = 160
+MIN_BASE64_CANDIDATE_LENGTH = 96
 MIME_MAP = {
     "png": "image/png",
     "gif": "image/gif",
@@ -40,6 +44,11 @@ EXTENSION_MAP = {
     "mp4": ".mp4",
     "webm": ".webm",
 }
+STATIC_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+ANIMATED_IMAGE_EXTENSIONS = {".gif", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".webm"}
+BASE64_TEXT_CANDIDATE_PATTERN = re.compile(r"[A-Za-z0-9+/=\s]{96,}")
+DATA_URI_PATTERN = re.compile(r"data:(?P<mime>[-\w.+]+/[-\w.+]+);base64,(?P<data>[A-Za-z0-9+/=\s]+)", re.IGNORECASE)
 
 
 def _log(message: str) -> None:
@@ -47,7 +56,8 @@ def _log(message: str) -> None:
 
 
 def _normalize_prefix(value: str | None, default: str) -> str:
-    cleaned = (value or "").strip().replace(" ", "_")
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", (value or "").strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._ ")
     return cleaned or default
 
 
@@ -61,6 +71,12 @@ def _format_size(size_bytes: int) -> str:
 
 def _get_output_dir() -> Path:
     return Path(folder_paths.get_output_directory())
+
+
+def _get_package_output_dir() -> Path:
+    output_dir = _get_output_dir() / OUTPUT_SUBFOLDER
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
 
 
 def _ensure_downloads_dir() -> Path:
@@ -78,8 +94,22 @@ def _save_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _save_optional_download_copy(path: Path, data: bytes | str) -> str:
+    try:
+        downloads_dir = _ensure_downloads_dir()
+        target = downloads_dir / path.name
+        if isinstance(data, bytes):
+            _save_binary(target, data)
+        else:
+            _save_text(target, data)
+        return str(target)
+    except OSError as exc:
+        _log(f"Downloads copy skipped for '{path.name}': {exc}")
+        return ""
+
+
 def _clean_base64(text: str) -> str:
-    cleaned = (text or "").strip()
+    cleaned = (text or "").strip().strip("'\"")
     if cleaned.startswith("data:"):
         _, _, cleaned = cleaned.partition(",")
     cleaned = cleaned.replace("\n", "").replace("\r", "").replace(" ", "").replace("\t", "")
@@ -89,13 +119,102 @@ def _clean_base64(text: str) -> str:
     return cleaned
 
 
+def _can_decode_base64(text: str) -> bool:
+    if len(text) < 16:
+        return False
+    try:
+        base64.b64decode(text, validate=True)
+        return True
+    except Exception:
+        return False
+
+
+def _preview_base64(text: str, limit: int = BASE64_PREVIEW_CHARS) -> str:
+    payload = _clean_base64(text)
+    if len(payload) <= limit:
+        return payload
+    return f"{payload[:limit]}..."
+
+
 def _extract_data_uri(base64_string: str) -> tuple[str | None, str]:
     text = (base64_string or "").strip()
+    match = DATA_URI_PATTERN.search(text)
+    if match:
+        return match.group("mime").lower(), _clean_base64(match.group("data"))
     if text.startswith("data:"):
         header, _, payload = text.partition(",")
         mime_type = header[5:].split(";", 1)[0].strip().lower() if header else None
         return mime_type or None, _clean_base64(payload)
     return None, _clean_base64(text)
+
+
+def _extract_best_base64_payload(text: str) -> tuple[str | None, str]:
+    detected_mime, cleaned = _extract_data_uri(text)
+    if detected_mime or _can_decode_base64(cleaned):
+        return detected_mime, cleaned
+
+    candidates = []
+    for match in BASE64_TEXT_CANDIDATE_PATTERN.finditer(text or ""):
+        candidate = _clean_base64(match.group(0))
+        if len(candidate) >= MIN_BASE64_CANDIDATE_LENGTH and _can_decode_base64(candidate):
+            candidates.append(candidate)
+
+    if candidates:
+        candidates.sort(key=len, reverse=True)
+        return detected_mime, candidates[0]
+
+    return detected_mime, cleaned
+
+
+def _build_data_uri(mime_type: str, base64_payload: str) -> str:
+    return f"data:{mime_type};base64,{_clean_base64(base64_payload)}"
+
+
+def _relative_output_subfolder(path: Path) -> str:
+    try:
+        relative = path.parent.relative_to(_get_output_dir())
+    except ValueError:
+        return ""
+    relative_str = relative.as_posix()
+    return "" if relative_str == "." else relative_str
+
+
+def _build_output_entry(path: Path, entry_type: str = "output", format_name: str | None = None) -> dict:
+    entry = {
+        "filename": path.name,
+        "subfolder": _relative_output_subfolder(path),
+        "type": entry_type,
+    }
+    if format_name:
+        entry["format"] = format_name
+    return entry
+
+
+def _save_preview_image(frame: Image.Image, filename_stem: str) -> Path:
+    preview_path = _get_package_output_dir() / f"{filename_stem}_preview.png"
+    frame.save(preview_path, format="PNG")
+    return preview_path
+
+
+def _append_artifacts_to_ui(
+    ui_payload: dict,
+    media_path: Path,
+    mime_type: str,
+    text_path: Path | None = None,
+    preview_path: Path | None = None,
+) -> None:
+    ui_payload.setdefault("files", []).append(_build_output_entry(media_path))
+    if text_path is not None:
+        ui_payload.setdefault("files", []).append(_build_output_entry(text_path))
+
+    suffix = media_path.suffix.lower()
+    if suffix in STATIC_IMAGE_EXTENSIONS:
+        ui_payload.setdefault("images", []).append(_build_output_entry(media_path))
+    elif suffix in ANIMATED_IMAGE_EXTENSIONS | VIDEO_EXTENSIONS:
+        ui_payload.setdefault("gifs", []).append(_build_output_entry(media_path, format_name=suffix[1:]))
+
+    if preview_path is not None:
+        ui_payload.setdefault("images", []).append(_build_output_entry(preview_path))
 
 
 def _detect_binary_format(raw_data: bytes, fallback_mime: str | None = None) -> tuple[str, str]:
@@ -144,29 +263,31 @@ def encode_png_bytes(frames: list[Image.Image]) -> bytes:
 def encode_gif_bytes(frames: list[Image.Image], fps: float, loop: bool) -> bytes:
     buffer = io.BytesIO()
     duration = max(int(1000 / fps), 10)
-    frames[0].save(
-        buffer,
-        format="GIF",
-        save_all=True,
-        append_images=frames[1:],
-        duration=duration,
-        loop=0 if loop else 1,
-    )
+    save_kwargs = {
+        "format": "GIF",
+        "save_all": True,
+        "append_images": frames[1:],
+        "duration": duration,
+    }
+    if loop:
+        save_kwargs["loop"] = 0
+    frames[0].save(buffer, **save_kwargs)
     return buffer.getvalue()
 
 
 def encode_webp_bytes(frames: list[Image.Image], fps: float, loop: bool, quality: int) -> bytes:
     buffer = io.BytesIO()
     duration = max(int(1000 / fps), 1)
-    frames[0].save(
-        buffer,
-        format="WEBP",
-        save_all=True,
-        append_images=frames[1:],
-        duration=duration,
-        loop=0 if loop else 1,
-        quality=quality,
-    )
+    save_kwargs = {
+        "format": "WEBP",
+        "save_all": True,
+        "append_images": frames[1:],
+        "duration": duration,
+        "quality": quality,
+    }
+    if loop:
+        save_kwargs["loop"] = 0
+    frames[0].save(buffer, **save_kwargs)
     return buffer.getvalue()
 
 
@@ -387,8 +508,8 @@ class DarkHubVideoToBase64:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "INT")
-    RETURN_NAMES = ("base64_string", "mime_type", "frame_count")
+    RETURN_TYPES = ("STRING", "STRING", "INT", "IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("base64_string", "mime_type", "frame_count", "preview_images", "media_path", "base64_text_path")
     FUNCTION = "convert"
     CATEGORY = NODE_CATEGORY
     OUTPUT_NODE = True
@@ -440,49 +561,57 @@ class DarkHubVideoToBase64:
         base64_payload = base64.b64encode(raw_data).decode("utf-8")
         mime_type = MIME_MAP[format]
         extension = EXTENSION_MAP[format]
-        base64_output = f"data:{mime_type};base64,{base64_payload}" if add_data_uri else base64_payload
+        base64_output = _build_data_uri(mime_type, base64_payload) if add_data_uri else base64_payload
 
         timestamp = int(time.time())
-        media_filename = f"{filename_prefix}_{timestamp}{extension}"
-        text_filename = f"{filename_prefix}_{timestamp}_base64.txt"
+        filename_stem = f"{filename_prefix}_{timestamp}"
+        media_path = _get_package_output_dir() / f"{filename_stem}{extension}"
+        text_path = _get_package_output_dir() / f"{filename_stem}_base64.txt"
+        preview_path = None
 
-        output_dir = _get_output_dir()
-        _save_binary(output_dir / media_filename, raw_data)
-        _save_text(output_dir / text_filename, base64_output)
+        _save_binary(media_path, raw_data)
+        _save_text(text_path, base64_output)
+
+        if extension in ANIMATED_IMAGE_EXTENSIONS | VIDEO_EXTENSIONS:
+            preview_path = _save_preview_image(frames[0], filename_stem)
 
         downloads_media_path = ""
         downloads_text_path = ""
         if auto_download:
-            downloads_dir = _ensure_downloads_dir()
-            downloads_media_path = str(downloads_dir / media_filename)
-            downloads_text_path = str(downloads_dir / text_filename)
-            _save_binary(downloads_dir / media_filename, raw_data)
-            _save_text(downloads_dir / text_filename, base64_output)
+            downloads_media_path = _save_optional_download_copy(media_path, raw_data)
+            downloads_text_path = _save_optional_download_copy(text_path, base64_output)
 
         file_size = _format_size(len(raw_data))
         audio_label = " + audio" if audio_attached else ""
+        base64_preview = _preview_base64(base64_output)
         status = (
             f"Base64 ready | {mime_type}{audio_label} | Frames: {batch_size} | "
             f"Size: {file_size} | Length: {len(base64_output):,} chars | Version: {PACKAGE_VERSION}"
         )
-        if auto_download:
+        if auto_download and downloads_media_path:
             status += " | Downloads: saved"
 
         _log(status)
 
+        ui_payload = {
+            "text": [f"{status}\nBase64 preview: {base64_preview}"],
+            "base64_data": [base64_output],
+            "base64_preview": [base64_preview],
+            "mime_type": [mime_type],
+            "media_filename": [media_path.name],
+            "media_path": [str(media_path)],
+            "txt_filename": [text_path.name],
+            "txt_path": [str(text_path)],
+            "file_size": [file_size],
+            "version": [PACKAGE_VERSION],
+            "downloads_media_path": [downloads_media_path],
+            "downloads_text_path": [downloads_text_path],
+        }
+        _append_artifacts_to_ui(ui_payload, media_path, mime_type, text_path=text_path, preview_path=preview_path)
+
         return {
-            "ui": {
-                "text": [status],
-                "base64_data": [base64_output],
-                "mime_type": [mime_type],
-                "media_filename": [media_filename],
-                "txt_filename": [text_filename],
-                "file_size": [file_size],
-                "version": [PACKAGE_VERSION],
-                "downloads_media_path": [downloads_media_path],
-                "downloads_text_path": [downloads_text_path],
-            },
-            "result": (base64_output, mime_type, batch_size),
+            "ui": ui_payload,
+            "result": (base64_output, mime_type, batch_size, images, str(media_path), str(text_path)),
         }
 
 
@@ -499,8 +628,8 @@ class DarkHubBase64ToImage:
             },
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("images",)
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("images", "mime_type", "media_path", "base64_text_path")
     FUNCTION = "decode"
     CATEGORY = NODE_CATEGORY
     OUTPUT_NODE = True
@@ -509,7 +638,7 @@ class DarkHubBase64ToImage:
         import torch
 
         filename_prefix = _normalize_prefix(filename_prefix, DEFAULT_DECODE_PREFIX)
-        detected_mime, cleaned = _extract_data_uri(base64_string)
+        detected_mime, cleaned = _extract_best_base64_payload(base64_string)
 
         if not cleaned:
             raise ValueError("[darkHUB] Empty base64 string received.")
@@ -517,26 +646,33 @@ class DarkHubBase64ToImage:
         _log(f"Decoding Base64 input with {len(cleaned):,} characters.")
 
         try:
-            raw_data = base64.b64decode(cleaned)
+            raw_data = base64.b64decode(cleaned, validate=False)
         except Exception as exc:
-            raise ValueError(f"[darkHUB] Base64 decode failed: {exc}") from exc
+            raise ValueError(
+                f"[darkHUB] Base64 decode failed: {exc}. "
+                "Expected a real Base64 string or data URI. If you connected Base64 Info, use the encoder's base64_string output instead."
+            ) from exc
 
         extension, mime_type = _detect_binary_format(raw_data, fallback_mime=detected_mime)
+        normalized_base64 = _build_data_uri(mime_type, cleaned)
         file_size = _format_size(len(raw_data))
 
         timestamp = int(time.time())
-        output_filename = f"{filename_prefix}_{timestamp}{extension}"
-        output_dir = _get_output_dir()
-        output_path = output_dir / output_filename
+        filename_stem = f"{filename_prefix}_{timestamp}"
+        output_path = _get_package_output_dir() / f"{filename_stem}{extension}"
+        text_path = _get_package_output_dir() / f"{filename_stem}_base64.txt"
+        preview_path = None
+
         _save_binary(output_path, raw_data)
+        _save_text(text_path, normalized_base64)
 
         downloads_path = ""
+        downloads_text_path = ""
         if auto_download:
-            downloads_dir = _ensure_downloads_dir()
-            downloads_path = str(downloads_dir / output_filename)
-            _save_binary(downloads_dir / output_filename, raw_data)
+            downloads_path = _save_optional_download_copy(output_path, raw_data)
+            downloads_text_path = _save_optional_download_copy(text_path, normalized_base64)
 
-        if extension in (".mp4", ".webm"):
+        if extension in VIDEO_EXTENSIONS:
             frames = self._decode_video_frames(raw_data, extension)
             if not frames:
                 raise RuntimeError(
@@ -549,21 +685,40 @@ class DarkHubBase64ToImage:
         if not frames:
             raise ValueError("[darkHUB] No frames were decoded from the provided Base64 data.")
 
+        if extension in ANIMATED_IMAGE_EXTENSIONS | VIDEO_EXTENSIONS:
+            preview_path = _save_preview_image(Image.fromarray((frames[0] * 255).clip(0, 255).astype(np.uint8)), filename_stem)
+
         tensor = torch.from_numpy(np.stack(frames, axis=0))
 
-        status = f"Decode complete | {mime_type} | Frames: {tensor.shape[0]} | Size: {file_size} | Version: {PACKAGE_VERSION}"
-        if auto_download:
+        base64_preview = _preview_base64(normalized_base64)
+        status = (
+            f"Decode complete | {mime_type} | Frames: {tensor.shape[0]} | "
+            f"Size: {file_size} | Version: {PACKAGE_VERSION}"
+        )
+        if auto_download and downloads_path:
             status += " | Downloads: saved"
         _log(status)
 
+        ui_payload = {
+            "text": [f"{status}\nBase64 preview: {base64_preview}"],
+            "base64_data": [normalized_base64],
+            "base64_preview": [base64_preview],
+            "mime_type": [mime_type],
+            "media_filename": [output_path.name],
+            "media_path": [str(output_path)],
+            "txt_filename": [text_path.name],
+            "txt_path": [str(text_path)],
+            "filename": [output_path.name],
+            "downloads_path": [downloads_path],
+            "downloads_text_path": [downloads_text_path],
+            "file_size": [file_size],
+            "version": [PACKAGE_VERSION],
+        }
+        _append_artifacts_to_ui(ui_payload, output_path, mime_type, text_path=text_path, preview_path=preview_path)
+
         return {
-            "ui": {
-                "text": [status],
-                "filename": [output_filename],
-                "downloads_path": [downloads_path],
-                "version": [PACKAGE_VERSION],
-            },
-            "result": (tensor,),
+            "ui": ui_payload,
+            "result": (tensor, mime_type, str(output_path), str(text_path)),
         }
 
     def _decode_image_frames(self, raw_data: bytes, fallback_path: Path) -> list[np.ndarray]:
@@ -717,11 +872,13 @@ class DarkHubBase64Info:
         except Exception:
             raw_size = 0
 
+        base64_preview = _preview_base64(base64_string)
         info_text = (
             f"Format: {mime_type}\n"
             f"Frames: {frame_count}\n"
             f"File size: {_format_size(raw_size)}\n"
             f"Base64 length: {len(base64_string):,} chars\n"
+            f"Base64 preview: {base64_preview}\n"
             f"Node version: {PACKAGE_VERSION}"
         )
         _log(f"Info requested\n{info_text}")

@@ -1,9 +1,16 @@
-import { app } from "../../scripts/app.js";
+﻿import { app } from "../../scripts/app.js";
+
+function normalizeBase64Payload(base64Data) {
+    if (!base64Data) {
+        return "";
+    }
+    return base64Data.startsWith("data:") ? base64Data.split(",")[1] : base64Data;
+}
 
 function downloadBlob(base64Data, mimeType, filename) {
-    let payload = base64Data;
-    if (payload.startsWith("data:")) {
-        payload = payload.split(",")[1];
+    const payload = normalizeBase64Payload(base64Data);
+    if (!payload) {
+        throw new Error("No Base64 payload available for download.");
     }
 
     const byteChars = atob(payload);
@@ -12,11 +19,11 @@ function downloadBlob(base64Data, mimeType, filename) {
         bytes[index] = byteChars.charCodeAt(index);
     }
 
-    const blob = new Blob([bytes], { type: mimeType });
+    const blob = new Blob([bytes], { type: mimeType || "application/octet-stream" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = filename;
+    anchor.download = filename || "darkhub_output";
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
@@ -28,7 +35,7 @@ function downloadText(text, filename) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = filename;
+    anchor.download = filename || "darkhub_base64.txt";
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
@@ -134,21 +141,76 @@ function appendStatusBlock(element, text, color = "#4caf50") {
     element.appendChild(status);
 }
 
-function appendPreviewBlock(element, base64Data) {
+function appendPreviewBlock(element, base64Data, explicitPreview) {
     const preview = document.createElement("div");
     preview.style.cssText = `
         color: #a8adb7;
         font-size: 10px;
         margin-bottom: 8px;
         word-break: break-all;
-        max-height: 36px;
+        max-height: 52px;
         overflow: hidden;
         font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
         line-height: 1.35;
     `;
-    const raw = base64Data.startsWith("data:") ? base64Data.split(",")[1] : base64Data;
-    preview.textContent = raw.length > 88 ? `${raw.substring(0, 88)}...` : raw;
+    const raw = explicitPreview || normalizeBase64Payload(base64Data);
+    preview.textContent = raw;
     element.appendChild(preview);
+}
+
+function extractMessageValue(message, key) {
+    const value = message?.[key];
+    return Array.isArray(value) ? value[0] : value;
+}
+
+function appendBase64Panel(element, config) {
+    const {
+        status,
+        base64Data,
+        base64Preview,
+        mimeType,
+        mediaFilename,
+        textFilename,
+        fileSize,
+        downloadsPath,
+        accentColor,
+    } = config;
+
+    appendStatusBlock(element, status || "Base64 ready.", accentColor || "#4caf50");
+
+    if (base64Data || base64Preview) {
+        appendPreviewBlock(element, base64Data, base64Preview);
+    }
+
+    if (downloadsPath) {
+        appendStatusBlock(element, `Downloads copy: ${downloadsPath}`, "#c7ccd4");
+    }
+
+    if (base64Data && mimeType) {
+        const extension = mediaFilename ? mediaFilename.split(".").pop().toUpperCase() : "FILE";
+        element.appendChild(
+            createButton(`Download ${extension} (${fileSize || "unknown"})`, "#1e7a31", async (button) => {
+                downloadBlob(base64Data, mimeType, mediaFilename || "darkhub_output");
+                setTemporaryLabel(button, "Download started");
+            }),
+        );
+    }
+
+    if (base64Data) {
+        element.appendChild(
+            createButton("Copy Base64", "#245e9b", async (button) => {
+                await copyToClipboard(base64Data);
+                setTemporaryLabel(button, "Copied");
+            }),
+        );
+
+        element.appendChild(
+            createButton("Download Base64 TXT", "#6640a8", async (button) => {
+                downloadText(base64Data, textFilename || "darkhub_base64.txt");
+                setTemporaryLabel(button, "TXT saved");
+            }),
+        );
+    }
 }
 
 app.registerExtension({
@@ -163,45 +225,18 @@ app.registerExtension({
                     return;
                 }
 
-                const base64Data = Array.isArray(message.base64_data) ? message.base64_data[0] : message.base64_data;
-                const mimeType = Array.isArray(message.mime_type) ? message.mime_type[0] : message.mime_type;
-                const status = Array.isArray(message.text) ? message.text[0] : message.text;
-                const mediaFilename = Array.isArray(message.media_filename) ? message.media_filename[0] : message.media_filename;
-                const textFilename = Array.isArray(message.txt_filename) ? message.txt_filename[0] : message.txt_filename;
-                const fileSize = Array.isArray(message.file_size) ? message.file_size[0] : message.file_size;
-
-                if (!base64Data) {
-                    return;
-                }
-
                 const { element } = getOrCreateContainer(this, "darkhub_controls");
-
-                appendStatusBlock(element, status || "Base64 ready.");
-                appendPreviewBlock(element, base64Data);
-
-                const extension = mediaFilename ? mediaFilename.split(".").pop().toUpperCase() : "FILE";
-
-                element.appendChild(
-                    createButton(`Download ${extension} (${fileSize || "unknown"})`, "#1e7a31", async (button) => {
-                        downloadBlob(base64Data, mimeType, mediaFilename || "darkhub_output");
-                        setTemporaryLabel(button, "Download started");
-                    }),
-                );
-
-                element.appendChild(
-                    createButton("Copy Base64", "#245e9b", async (button) => {
-                        await copyToClipboard(base64Data);
-                        setTemporaryLabel(button, "Copied");
-                    }),
-                );
-
-                element.appendChild(
-                    createButton("Download Base64 TXT", "#6640a8", async (button) => {
-                        downloadText(base64Data, textFilename || "darkhub_base64.txt");
-                        setTemporaryLabel(button, "TXT saved");
-                    }),
-                );
-
+                appendBase64Panel(element, {
+                    status: extractMessageValue(message, "text"),
+                    base64Data: extractMessageValue(message, "base64_data"),
+                    base64Preview: extractMessageValue(message, "base64_preview"),
+                    mimeType: extractMessageValue(message, "mime_type"),
+                    mediaFilename: extractMessageValue(message, "media_filename"),
+                    textFilename: extractMessageValue(message, "txt_filename"),
+                    fileSize: extractMessageValue(message, "file_size"),
+                    downloadsPath: extractMessageValue(message, "downloads_text_path"),
+                    accentColor: "#4caf50",
+                });
                 this.setSize(this.computeSize());
             };
         }
@@ -214,16 +249,18 @@ app.registerExtension({
                     return;
                 }
 
-                const status = Array.isArray(message.text) ? message.text[0] : message.text;
-                const downloadsPath = Array.isArray(message.downloads_path) ? message.downloads_path[0] : message.downloads_path;
                 const { element } = getOrCreateContainer(this, "darkhub_decode_status");
-
-                let text = status || "Decode complete.";
-                if (downloadsPath) {
-                    text += "\nDownloads copy saved.";
-                }
-
-                appendStatusBlock(element, text);
+                appendBase64Panel(element, {
+                    status: extractMessageValue(message, "text"),
+                    base64Data: extractMessageValue(message, "base64_data"),
+                    base64Preview: extractMessageValue(message, "base64_preview"),
+                    mimeType: extractMessageValue(message, "mime_type"),
+                    mediaFilename: extractMessageValue(message, "media_filename"),
+                    textFilename: extractMessageValue(message, "txt_filename"),
+                    fileSize: extractMessageValue(message, "file_size"),
+                    downloadsPath: extractMessageValue(message, "downloads_text_path") || extractMessageValue(message, "downloads_path"),
+                    accentColor: "#6bd1ff",
+                });
                 this.setSize(this.computeSize());
             };
         }
@@ -236,7 +273,7 @@ app.registerExtension({
                     return;
                 }
 
-                const infoText = Array.isArray(message.text) ? message.text[0] : message.text;
+                const infoText = extractMessageValue(message, "text");
                 const { element } = getOrCreateContainer(this, "darkhub_info");
                 appendStatusBlock(element, infoText, "#d6d9df");
                 this.setSize(this.computeSize());
