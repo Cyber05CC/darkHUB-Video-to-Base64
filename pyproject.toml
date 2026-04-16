@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "darkhub-video-to-base64"
 version = "1.1.0"
 description = "ComfyUI custom nodes for converting images and videos to Base64 and decoding Base64 payloads back into IMAGE tensors."
