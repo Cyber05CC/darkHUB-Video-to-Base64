@@ -1,48 +1,10 @@
-﻿import { app } from "../../scripts/app.js";
-
-function normalizeBase64Payload(base64Data) {
-    if (!base64Data) {
-        return "";
-    }
-    return base64Data.startsWith("data:") ? base64Data.split(",")[1] : base64Data;
-}
-
-function downloadBlob(base64Data, mimeType, filename) {
-    const payload = normalizeBase64Payload(base64Data);
-    if (!payload) {
-        throw new Error("No Base64 payload available for download.");
-    }
-
-    const byteChars = atob(payload);
-    const bytes = new Uint8Array(byteChars.length);
-    for (let index = 0; index < byteChars.length; index += 1) {
-        bytes[index] = byteChars.charCodeAt(index);
-    }
-
-    const blob = new Blob([bytes], { type: mimeType || "application/octet-stream" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename || "darkhub_output";
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function downloadText(text, filename) {
-    const blob = new Blob([text], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename || "darkhub_base64.txt";
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
+import { app } from "../../scripts/app.js";
 
 async function copyToClipboard(text) {
+    if (!text) {
+        throw new Error("No Base64 payload is available to copy.");
+    }
+
     if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
         return;
@@ -52,6 +14,7 @@ async function copyToClipboard(text) {
     textArea.value = text;
     textArea.style.position = "fixed";
     textArea.style.opacity = "0";
+    textArea.style.pointerEvents = "none";
     document.body.appendChild(textArea);
     textArea.focus();
     textArea.select();
@@ -68,42 +31,20 @@ function setTemporaryLabel(button, label, timeout = 1400) {
     }, timeout);
 }
 
-function createButton(label, backgroundColor, onClick) {
-    const button = document.createElement("button");
-    button.dataset.label = label;
-    button.textContent = label;
-    button.style.cssText = `
-        width: 100%;
-        padding: 8px 12px;
-        margin: 4px 0 0;
-        border: none;
-        border-radius: 6px;
-        background: ${backgroundColor};
-        color: #ffffff;
-        font-weight: 700;
-        font-size: 12px;
-        cursor: pointer;
-        transition: opacity 0.18s ease;
-    `;
+function extractMessageValue(message, key) {
+    const value = message?.[key];
+    return Array.isArray(value) ? value[0] : value;
+}
 
-    button.addEventListener("mouseenter", () => {
-        button.style.opacity = "0.88";
-    });
-    button.addEventListener("mouseleave", () => {
-        button.style.opacity = "1";
-    });
-    button.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        try {
-            await onClick(button);
-        } catch (error) {
-            console.error("[darkHUB Base64 Nodes]", error);
-            setTemporaryLabel(button, "Action failed");
-        }
-    });
-
-    return button;
+function formatNumber(value) {
+    if (value === undefined || value === null || value === "") {
+        return "-";
+    }
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+        return numeric.toLocaleString();
+    }
+    return String(value);
 }
 
 function getOrCreateContainer(node, widgetName) {
@@ -117,7 +58,7 @@ function getOrCreateContainer(node, widgetName) {
     }
 
     const container = document.createElement("div");
-    container.style.cssText = "padding: 4px 8px 6px; width: 100%; box-sizing: border-box;";
+    container.style.cssText = "padding: 6px 8px 8px; width: 100%; box-sizing: border-box;";
 
     const widget = node.addDOMWidget(widgetName, "custom", container, {
         serialize: false,
@@ -127,157 +68,160 @@ function getOrCreateContainer(node, widgetName) {
     return { widget, element: container };
 }
 
-function appendStatusBlock(element, text, color = "#4caf50") {
-    const status = document.createElement("div");
-    status.style.cssText = `
-        color: ${color};
+function createMetaChip(label, value) {
+    const chip = document.createElement("div");
+    chip.style.cssText = `
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(109, 209, 255, 0.1);
+        border: 1px solid rgba(109, 209, 255, 0.18);
+        color: #d7ecff;
+        font-size: 11px;
+        line-height: 1;
+        min-width: 0;
+        box-sizing: border-box;
+    `;
+
+    const labelEl = document.createElement("span");
+    labelEl.style.cssText = "color: #8db8d8; font-weight: 600;";
+    labelEl.textContent = `${label}:`;
+
+    const valueEl = document.createElement("span");
+    valueEl.style.cssText = "color: #f3f8ff; font-weight: 700;";
+    valueEl.textContent = value;
+
+    chip.append(labelEl, valueEl);
+    return chip;
+}
+
+function createCopyButton(base64Data, mimeType) {
+    const button = document.createElement("button");
+    const label = mimeType?.includes("video") ? "Copy Base64 (MP4)" : "Copy Base64 (PNG)";
+    button.dataset.label = label;
+    button.textContent = label;
+    button.disabled = !base64Data;
+    button.style.cssText = `
+        width: 100%;
+        padding: 11px 14px;
+        border: none;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #1f7ae0, #0aa56f);
+        color: #ffffff;
+        font-weight: 800;
         font-size: 12px;
-        margin-bottom: 6px;
-        white-space: pre-wrap;
-        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-        line-height: 1.45;
+        letter-spacing: 0.02em;
+        cursor: ${base64Data ? "pointer" : "not-allowed"};
+        opacity: ${base64Data ? "1" : "0.55"};
+        transition: opacity 0.18s ease, transform 0.18s ease;
     `;
-    status.textContent = text;
-    element.appendChild(status);
-}
-
-function appendPreviewBlock(element, base64Data, explicitPreview) {
-    const preview = document.createElement("div");
-    preview.style.cssText = `
-        color: #a8adb7;
-        font-size: 10px;
-        margin-bottom: 8px;
-        word-break: break-all;
-        max-height: 52px;
-        overflow: hidden;
-        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-        line-height: 1.35;
-    `;
-    const raw = explicitPreview || normalizeBase64Payload(base64Data);
-    preview.textContent = raw;
-    element.appendChild(preview);
-}
-
-function extractMessageValue(message, key) {
-    const value = message?.[key];
-    return Array.isArray(value) ? value[0] : value;
-}
-
-function appendBase64Panel(element, config) {
-    const {
-        status,
-        base64Data,
-        base64Preview,
-        mimeType,
-        mediaFilename,
-        textFilename,
-        fileSize,
-        downloadsPath,
-        accentColor,
-    } = config;
-
-    appendStatusBlock(element, status || "Base64 ready.", accentColor || "#4caf50");
-
-    if (base64Data || base64Preview) {
-        appendPreviewBlock(element, base64Data, base64Preview);
-    }
-
-    if (downloadsPath) {
-        appendStatusBlock(element, `Downloads copy: ${downloadsPath}`, "#c7ccd4");
-    }
-
-    if (base64Data && mimeType) {
-        const extension = mediaFilename ? mediaFilename.split(".").pop().toUpperCase() : "FILE";
-        element.appendChild(
-            createButton(`Download ${extension} (${fileSize || "unknown"})`, "#1e7a31", async (button) => {
-                downloadBlob(base64Data, mimeType, mediaFilename || "darkhub_output");
-                setTemporaryLabel(button, "Download started");
-            }),
-        );
-    }
 
     if (base64Data) {
-        element.appendChild(
-            createButton("Copy Base64", "#245e9b", async (button) => {
+        button.addEventListener("mouseenter", () => {
+            button.style.opacity = "0.9";
+            button.style.transform = "translateY(-1px)";
+        });
+        button.addEventListener("mouseleave", () => {
+            button.style.opacity = "1";
+            button.style.transform = "translateY(0)";
+        });
+        button.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            try {
                 await copyToClipboard(base64Data);
                 setTemporaryLabel(button, "Copied");
-            }),
-        );
-
-        element.appendChild(
-            createButton("Download Base64 TXT", "#6640a8", async (button) => {
-                downloadText(base64Data, textFilename || "darkhub_base64.txt");
-                setTemporaryLabel(button, "TXT saved");
-            }),
-        );
+            } catch (error) {
+                console.error("[darkHUB Base64 Nodes]", error);
+                setTemporaryLabel(button, "Copy failed");
+            }
+        });
     }
+
+    return button;
+}
+
+function renderCopyPanel(element, config) {
+    element.innerHTML = "";
+
+    const card = document.createElement("div");
+    card.style.cssText = `
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(109, 209, 255, 0.18);
+        background: linear-gradient(180deg, rgba(20, 24, 30, 0.98), rgba(14, 17, 22, 0.98));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+        overflow: hidden;
+    `;
+
+    const title = document.createElement("div");
+    title.style.cssText = "color: #f6fbff; font-size: 13px; font-weight: 800; letter-spacing: 0.02em;";
+    title.textContent = "Base64 Storage";
+
+    const subtitle = document.createElement("div");
+    subtitle.style.cssText = `
+        color: #a8b8c7;
+        font-size: 11px;
+        line-height: 1.5;
+        word-break: break-word;
+    `;
+    subtitle.textContent = config.status || "The latest Base64 result is stored in the node and can be copied at any time.";
+
+    const chips = document.createElement("div");
+    chips.style.cssText = "display: flex; flex-wrap: wrap; gap: 6px; width: 100%;";
+    chips.append(
+        createMetaChip("Format", config.mimeType || "-"),
+        createMetaChip("Frames", formatNumber(config.frameCount)),
+        createMetaChip("Chars", formatNumber(config.base64Length)),
+        createMetaChip("Size", config.fileSize || "-"),
+        createMetaChip("Audio", config.hasAudio ? "embedded" : "none"),
+    );
+
+    card.append(title, subtitle, chips, createCopyButton(config.base64Data, config.mimeType));
+    element.appendChild(card);
+}
+
+function refreshNodeSize(node) {
+    window.requestAnimationFrame(() => {
+        const nextSize = node.computeSize();
+        nextSize[0] = Math.max(nextSize[0], 320);
+        node.setSize(nextSize);
+    });
 }
 
 app.registerExtension({
-    name: "darkHUB.Base64Nodes",
+    name: "darkHUB.Base64CopyOnly",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name === "DarkHubVideoToBase64") {
-            const originalOnExecuted = nodeType.prototype.onExecuted;
-            nodeType.prototype.onExecuted = function onExecuted(message) {
-                originalOnExecuted?.apply(this, arguments);
-                if (!message) {
-                    return;
-                }
-
-                const { element } = getOrCreateContainer(this, "darkhub_controls");
-                appendBase64Panel(element, {
-                    status: extractMessageValue(message, "text"),
-                    base64Data: extractMessageValue(message, "base64_data"),
-                    base64Preview: extractMessageValue(message, "base64_preview"),
-                    mimeType: extractMessageValue(message, "mime_type"),
-                    mediaFilename: extractMessageValue(message, "media_filename"),
-                    textFilename: extractMessageValue(message, "txt_filename"),
-                    fileSize: extractMessageValue(message, "file_size"),
-                    downloadsPath: extractMessageValue(message, "downloads_text_path"),
-                    accentColor: "#4caf50",
-                });
-                this.setSize(this.computeSize());
-            };
+        if (nodeData.name !== "DarkHubVideoToBase64") {
+            return;
         }
 
-        if (nodeData.name === "DarkHubBase64ToImage") {
-            const originalOnExecuted = nodeType.prototype.onExecuted;
-            nodeType.prototype.onExecuted = function onExecuted(message) {
-                originalOnExecuted?.apply(this, arguments);
-                if (!message) {
-                    return;
-                }
+        const originalOnExecuted = nodeType.prototype.onExecuted;
+        nodeType.prototype.onExecuted = function onExecuted(message) {
+            originalOnExecuted?.apply(this, arguments);
+            if (!message) {
+                return;
+            }
 
-                const { element } = getOrCreateContainer(this, "darkhub_decode_status");
-                appendBase64Panel(element, {
-                    status: extractMessageValue(message, "text"),
-                    base64Data: extractMessageValue(message, "base64_data"),
-                    base64Preview: extractMessageValue(message, "base64_preview"),
-                    mimeType: extractMessageValue(message, "mime_type"),
-                    mediaFilename: extractMessageValue(message, "media_filename"),
-                    textFilename: extractMessageValue(message, "txt_filename"),
-                    fileSize: extractMessageValue(message, "file_size"),
-                    downloadsPath: extractMessageValue(message, "downloads_text_path") || extractMessageValue(message, "downloads_path"),
-                    accentColor: "#6bd1ff",
-                });
-                this.setSize(this.computeSize());
-            };
-        }
-
-        if (nodeData.name === "DarkHubBase64Info") {
-            const originalOnExecuted = nodeType.prototype.onExecuted;
-            nodeType.prototype.onExecuted = function onExecuted(message) {
-                originalOnExecuted?.apply(this, arguments);
-                if (!message?.text) {
-                    return;
-                }
-
-                const infoText = extractMessageValue(message, "text");
-                const { element } = getOrCreateContainer(this, "darkhub_info");
-                appendStatusBlock(element, infoText, "#d6d9df");
-                this.setSize(this.computeSize());
-            };
-        }
+            const { element } = getOrCreateContainer(this, "darkhub_copy_panel");
+            renderCopyPanel(element, {
+                status: extractMessageValue(message, "text"),
+                base64Data: extractMessageValue(message, "base64_data"),
+                mimeType: extractMessageValue(message, "mime_type"),
+                frameCount: extractMessageValue(message, "frame_count"),
+                base64Length: extractMessageValue(message, "base64_length"),
+                fileSize: extractMessageValue(message, "file_size"),
+                hasAudio: Boolean(extractMessageValue(message, "has_audio")),
+            });
+            refreshNodeSize(this);
+        };
     },
 });

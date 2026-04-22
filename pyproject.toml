@@ -1,12 +1,12 @@
 [project]
 name = "darkhub-video-to-base64"
-version = "1.1.0"
-description = "ComfyUI custom nodes for converting images and videos to Base64 and decoding Base64 payloads back into IMAGE tensors."
+version = "2.0.0"
+description = "ComfyUI custom nodes for turning IMAGE batches into copyable PNG or MP4 Base64 strings, with optional MP4 audio muxing and Base64 decode helpers."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "darkHUB" }]
-keywords = ["comfyui", "custom-node", "base64", "video", "image", "audio"]
+keywords = ["comfyui", "custom-node", "base64", "video", "image", "audio", "runninghub"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "License :: OSI Approved :: MIT License",
@@ -20,11 +20,9 @@ dependencies = [
 ]
 
 [project.urls]
-# Replace this with the final GitHub repository URL before publishing to the ComfyUI Registry.
 Repository = "https://github.com/Cyber05CC/darkHUB-Video-to-Base64"
 
 [tool.comfy]
-# Replace this with your actual Comfy Registry publisher ID before publishing.
 PublisherId = "darken"
 DisplayName = "darkHUB Video to Base64"
 includes = ["web"]
