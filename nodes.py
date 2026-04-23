@@ -15,7 +15,7 @@ from PIL import Image
 try:
     from ._version import VERSION as PACKAGE_VERSION
 except ImportError:
-    PACKAGE_VERSION = "2.0.0"
+    PACKAGE_VERSION = "1.0.0"
 
 
 PACKAGE_NAME = "darkHUB Video to Base64"
