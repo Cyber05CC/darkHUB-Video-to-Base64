@@ -1,31 +1,20 @@
-# darkHUB Video to Base64
+# darkHUB Base64
 
-`darkHUB Video to Base64` is a focused ComfyUI custom node pack for converting generated `IMAGE` batches into copyable Base64 strings.
+`darkHUB Base64` is a single-purpose ComfyUI custom node.
 
-Version `2.0.0` is a RunningHub-friendly refactor with a simpler workflow:
+It accepts an `IMAGE` output directly from nodes such as `VAE Decode`, stores the result as Base64 inside the node, and exposes a single `Copy Base64` button in the node UI.
 
-- PNG and MP4 Base64 export only
-- optional audio muxing into MP4 output
-- a responsive copy-only node UI with no image/video preview inside the node
-- robust Base64 extraction from raw strings or data URIs
-- compatibility helper nodes for decoding Base64 back into ComfyUI `IMAGE` tensors
+## Included Node
 
-## Included Nodes
-
-### 1. Video/Image -> Base64 (darkHUB)
-
-This is the main node.
-
-It accepts ComfyUI `IMAGE` output directly from nodes such as `VAE Decode`, image loaders, video frame generators, or any other node that outputs `IMAGE`.
+### darkHUB Base64
 
 Inputs:
 
 - `images`: ComfyUI `IMAGE`
 - `format`: `auto`, `png`, or `mp4`
-- `fps`: frame rate for MP4 export
+- `fps`: frame rate for MP4 output
 - `quality`: MP4 quality control
 - `audio` (optional): ComfyUI `AUDIO`, embedded when the output format is MP4
-- `add_data_uri` (optional): prepend `data:<mime>;base64,`
 
 Outputs:
 
@@ -33,23 +22,13 @@ Outputs:
 - `mime_type`
 - `frame_count`
 
-Legacy passthrough outputs are still returned for workflow compatibility, but the node no longer writes preview files or download artifacts.
-
-### 2. Base64 -> Image (darkHUB)
-
-Decodes Base64 strings or data URIs back into ComfyUI `IMAGE` tensors.
-
-### 3. Base64 Info (darkHUB)
-
-Displays file size, format, frame count, Base64 length, preview text, and the node version.
-
-## Behavior Notes
+## Behavior
 
 - `auto` chooses `png` for a single image with no audio.
-- `auto` chooses `mp4` for multi-frame image batches or when audio is connected.
-- If an older workflow still sends `gif`, `webp`, or `webm`, the node normalizes those requests to `png` or `mp4` and reports that in the node status.
-- The frontend panel only shows metadata plus a `Copy Base64` button.
-- For MP4 exports with audio, the audio track is muxed into the MP4 before Base64 encoding.
+- `auto` chooses `mp4` for multi-frame batches or when audio is connected.
+- The node UI only renders one button: `Copy Base64`.
+- PNG output does not accept audio.
+- MP4 output keeps the audio track when audio is connected.
 
 ## Installation
 
@@ -64,28 +43,13 @@ pip install -r requirements.txt
 
 ## ffmpeg Notes
 
-- If `ffmpeg` is already available in your system path, the node uses it directly.
+- If `ffmpeg` is available in your system path, the node uses it directly.
 - Otherwise the fallback binary from `imageio-ffmpeg` is used when available.
-- MP4 export and MP4 Base64 decode both require working `ffmpeg` support.
+- MP4 output requires working `ffmpeg` support.
 
-## GitHub Actions
+## Version
 
-This repository includes:
-
-- Python syntax validation
-- frontend syntax validation
-- Comfy Registry publishing metadata
-- a publish workflow that now skips safely when `REGISTRY_ACCESS_TOKEN` is not configured
-
-## Versioning
-
-Current release: `2.0.0`
-
-Semantic versioning is used:
-
-- `MAJOR`: breaking changes
-- `MINOR`: backwards-compatible features
-- `PATCH`: fixes and polish
+Current release: `3.0.0`
 
 ## License
 

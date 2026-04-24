@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.0 - 2026-04-24
+
+- reduced the package to a single registered node: `darkHUB Base64`
+- removed `Base64 -> Image` and `Base64 Info` from node registration so searching `darkHUB` only returns the main node
+- simplified the node UI to a single `Copy Base64` button
+- removed extra preview, metadata, and compatibility outputs from the main node
+- kept direct `IMAGE` to Base64 conversion with `png` and `mp4` support only
+- preserved MP4 audio muxing so video Base64 exports include audio when connected
+- aligned package metadata and documentation with the final single-node release
+
 ## 2.0.0 - 2026-04-22
 
 - refactored the main node into a PNG/MP4-focused Base64 encoder with a copy-only UI
