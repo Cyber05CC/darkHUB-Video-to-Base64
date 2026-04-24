@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.0.2 - 2026-04-24
+
+- aligned the published registry display name with the single-node product name: `darkHUB Base64`
+- prepared a fresh version to force a new Comfy Registry publish after the workflow fix
 ## 3.0.1 - 2026-04-24
 
 - fixed the GitHub Actions publish workflow so registry publishing no longer fails on secret parsing
