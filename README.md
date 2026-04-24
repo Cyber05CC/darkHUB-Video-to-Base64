@@ -49,7 +49,7 @@ pip install -r requirements.txt
 
 ## Version
 
-Current release: `3.0.0`
+Current release: `3.0.1`
 
 ## License
 

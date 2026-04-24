@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.0.1 - 2026-04-24
+
+- fixed the GitHub Actions publish workflow so registry publishing no longer fails on secret parsing
+- prepared a fresh semantic version for the next Comfy Registry publish
 ## 3.0.0 - 2026-04-24
 
 - reduced the package to a single registered node: `darkHUB Base64`

@@ -1,6 +1,6 @@
 [project]
 name = "darkhub-video-to-base64"
-version = "3.0.0"
+version = "3.0.1"
 description = "ComfyUI custom node for converting IMAGE batches into copyable PNG or MP4 Base64 strings, with optional MP4 audio muxing."
 readme = "README.md"
 requires-python = ">=3.10"
